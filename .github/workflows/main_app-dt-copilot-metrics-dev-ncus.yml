@@ -33,7 +33,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: .
+          path: .output/
 
   deploy:
     runs-on: ubuntu-latest
@@ -58,6 +58,10 @@ jobs:
       - name: 'Deploy to Azure Web App'
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'app-dt-copilot-metrics-dev-ncus'
+          slot-name: 'Production'
+          package: .
         with:
           app-name: 'app-dt-copilot-metrics-dev-ncus'
           slot-name: 'Production'
