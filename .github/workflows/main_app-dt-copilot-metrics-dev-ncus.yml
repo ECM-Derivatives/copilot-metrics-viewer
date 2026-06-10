@@ -17,13 +17,19 @@ jobs:
       - name: Set up Node.js version
         uses: actions/setup-node@v3
         with:
-          node-version: '20.x'
+          node-version: '24.x'
 
       - name: npm install and build
         run: |
           npm install
           npm run build
           sed -i '/.output/d' .gitignore
+
+      - name: Prepare deployment package
+        run: |
+          mkdir -p deploy
+          cp -r .output deploy/
+          ls -la deploy/.output/server/
 
       - name: Verify .output exists
         run: ls -la .output/server/
@@ -32,7 +38,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: .
+          path: deploy/
           if-no-files-found: error
 
   deploy:
@@ -60,4 +66,4 @@ jobs:
         with:
           app-name: 'app-dt-copilot-metrics-dev-ncus'
           slot-name: 'Production'
-          package: .
+          package: .output/
