@@ -23,6 +23,7 @@ jobs:
         run: |
           npm install
           npm run build
+          sed -i '/.output/d' .gitignore
 
       - name: Verify .output exists
         run: ls -la .output/server/
