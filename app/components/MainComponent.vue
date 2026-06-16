@@ -185,7 +185,7 @@
             <NuxtLink
               v-for="provider in activeProviders"
               :key="provider.id"
-              :to="`/auth/${provider.id}`"
+              :to="`${appBaseURL}auth/${provider.id}`"
               external
               class="github-login-button"
             >
@@ -202,7 +202,7 @@
 
 
     <div v-show="!apiError">
-      <v-progress-linear v-show="!metricsReady" indeterminate color="indigo" />
+      <v-progress-linear v-show="!metricsReady && !signInRequired" indeterminate color="indigo" />
       <v-window v-show="(metricsReady && metrics.length) || (seatsReady && tab === 'seat analysis') || (userMetricsReady && tab === 'user metrics') || (metricsReady && reportData.length > 0 && (tab === 'languages' || tab === 'editors'))" v-model="tab">
         <v-window-item v-for="item in tabItems" :key="item" :value="item">
           <v-card flat>
@@ -342,6 +342,7 @@ export default defineNuxtComponent({
       await this.fetchMetrics();
 
       // Re-fetch user metrics with updated date range
+      if (this.signInRequired) return;
       const { execute: executeUserMetrics, data: userMetricsData, error: userMetricsError } = this.userMetricsFetch;
       await executeUserMetrics();
       if (userMetricsError.value) {
@@ -580,6 +581,9 @@ export default defineNuxtComponent({
     const showLogoutButton = computed(() => isAuthRequired.value && loggedIn.value);
     const showAuthInfoDialog = ref(false);
 
+    // Base URL for auth provider links — respects NUXT_APP_BASE_URL for sub-path deployments
+    const appBaseURL = useAppBaseURL();
+
     const PROVIDER_META: Record<string, { label: string; icon: string }> = {
       github: { label: 'GitHub', icon: 'mdi-github' },
       google: { label: 'Google', icon: 'mdi-google' },
@@ -699,6 +703,7 @@ export default defineNuxtComponent({
       isAuthRequired,
       showAuthInfoDialog,
       activeProviders,
+      appBaseURL,
       mockedDataMessage,
       itemName,
       displayName,
