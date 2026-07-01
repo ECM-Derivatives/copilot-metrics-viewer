@@ -94,9 +94,74 @@ View individual user-level Copilot usage metrics including code completions, cha
 
 In **Historical mode** (with PostgreSQL), the User Metrics tab also displays per-user time-series history charts, allowing you to track individual adoption trends over time.
 
+The per-user table includes an **AI Credits** column showing each user's premium-request spend (sourced from the `ai_credits_used` field that GitHub added to the `users-28-day` Copilot metrics report on 2026-06-19). The column shows `—` when GitHub hasn't reported credits for the period (e.g., older mock data or enterprises that haven't enabled premium-request billing).
+
 <p align="center">
   <img width="800" alt="Per-User Metrics" src="./images/user-metrics.png">
 </p>
+
+### My Usage Tab
+Personal dashboard for the currently-authenticated user. Shows your own active days, interactions, accepted lines, AI credits used, top IDE, and top model — filtered server-side by `session.user.login` so you can never see another user's data from this tab.
+
+Visible to every authenticated user when any auth provider is configured (`NUXT_PUBLIC_AUTH_PROVIDERS`). Hidden when the app is running in PAT-only / no-auth mode, because there is no session user to filter by.
+
+<p align="center">
+  <img width="800" alt="My Usage tab — personal AI credit spend, CLI token usage, and daily charts" src="./images/my-usage.png">
+</p>
+
+### Billing (admin)
+Aggregate AI credit billing breakdown by model, SKU, cost center, and repository — pulled from the GitHub Billing API (`/organizations/{org}/settings/billing/ai_credit/usage` and `/enterprises/{ent}/settings/billing/ai_credit/usage`). Also includes a **per-user breakdown table** that joins the org's user list with each user's billing spend (lazy-loaded one page at a time), with "Top spenders by net cost" and "Top CLI token users" charts.
+
+**Visibility:**
+1. **When `NUXT_GITHUB_BILLING_TOKEN` is *not* configured** — the tab is shown to every dashboard user, but renders only a configuration-help placeholder (no data is fetched). This is a discoverability aid so operators learn the feature exists.
+2. **When `NUXT_GITHUB_BILLING_TOKEN` *is* configured** — the tab is **admin-only**: visible only to users on the `NUXT_USAGE_ADMINS` allowlist. In PAT-mode deployments (no OAuth provider configured) the allowlist is bypassed and the tab is visible to anyone who can reach the dashboard.
+
+**Why a separate token?** Billing endpoints have stricter auth than metrics endpoints — they require a **classic PAT** with `manage_billing:enterprise` (or `manage_billing:copilot`), SSO-authorized for the target enterprise. Fine-grained PATs and GitHub Apps cannot read billing today. Keeping `NUXT_GITHUB_BILLING_TOKEN` separate from `NUXT_GITHUB_TOKEN` means your metrics calls can keep using a GitHub App / fine-grained PAT while only billing uses the classic PAT.
+
+**Enterprise-owned orgs:** when a dashboard's org is consolidated under an enterprise (very common), `/organizations/{org}/settings/billing/ai_credit/usage` returns **404**. Set `NUXT_BILLING_ENTERPRISE=<enterprise-slug>` to route billing calls to `/enterprises/{slug}/...` regardless of the dashboard's scope. Without this override an org-scoped dashboard will see a 404 with a hint pointing at the variable.
+
+**Per-user attribution caveat:** the per-user breakdown depends on GitHub tagging each billing item with a `user`. Some enterprise plans (typically fully-pooled / centrally-billed) return only enterprise-level aggregates, in which case every user appears at $0 in the per-user table; the Billing tab surfaces an explanatory alert in that state. The My Usage tab and the User Metrics `ai_credits_used` column are independent of this and still work.
+
+#### Admin drill-down — inline User insights per user
+
+Each username in the Per-user breakdown table is a clickable chip. Selecting a chip reveals an inline **User insights** section directly below the table with that user's full Copilot activity report — the same view the user would see on their own My Usage tab (Active days, Interactions, Accepted lines, AI credits used, per-model spend, top IDE / language / model, day-by-day charts).
+
+No user selected → the section shows an info banner explaining the feature. Clicking a chip a second time (or "Clear selection") returns to the banner state.
+
+**Requires** the same `NUXT_GITHUB_BILLING_TOKEN` + `NUXT_BILLING_ENTERPRISE` variables as the rest of the Billing tab. The drill-down endpoint (`/api/my-usage?login=<other>`) is gated by `NUXT_USAGE_ADMINS`; non-admins receive 403. In PAT-only deployments the operator is admin-by-PAT and the drill-down works without an OAuth session.
+
+![Billing tab — Per-user breakdown with chip-style logins and the info banner state](images/billing-user-insights-banner.png)
+
+![Billing tab — inline User insights section showing a selected user's activity](images/billing-user-insights-selected.png)
+
+#### Billing CSV Ingest (local cache, multi-month windows)
+
+The live billing endpoints cap windows at ~31 days and rate-limit aggressively. For longer historical analysis, the dashboard can pull GitHub's **enterprise billing CSV exports** into a local Postgres table, then serve the Billing tab from the cache.
+
+When the cache covers the selected window, the Billing tab serves data from the DB and shows a small "Source: local cache" chip with the last-synced timestamp. When the window is partially or not covered, it falls back to the live API automatically.
+
+**Triggering an ingest** (admin panel → Billing CSV ingest):
+- Pick a date range (defaults to last 30 days through today)
+- Leave **"Skip already-ingested ranges"** checked to fetch only the gaps in your selected window — re-running for an overlapping range becomes cheap
+- Submit; the job runs in the background, polled by the recent-jobs table
+
+GitHub builds the export server-side and returns one or more signed download URLs (60-minute TTL). The ingester downloads, parses, dedupes by primary key, and bulk-upserts into the `billing_credit_usage` table. Multi-month windows are chunked at ≤31 days internally — you can request months of data in a single click.
+
+The recent-jobs table shows status, row count, who triggered, and a hover tooltip on the row count surfacing **what was fetched vs. skipped** (so you can verify gap-mode actually pruned re-fetches of already-ingested ranges).
+
+**Requires:** `NUXT_GITHUB_BILLING_TOKEN` set to a classic PAT with `manage_billing:enterprise` (same token used by the live Billing tab) plus `NUXT_BILLING_ENTERPRISE` for the enterprise slug. Postgres must be configured (see the storage section).
+
+![Admin panel — Billing CSV ingest controls](images/billing-csv-ingest.png)
+
+![Billing tab with per-user breakdown sourced from the local cache](images/billing-tab-cache.png)
+
+### My Usage (per-user, self-service)
+Personal Copilot activity for the signed-in user only — server-side filtered against the session. Surfaces:
+- `ai_credits_used` totals + per-day chart (when a date range is selected)
+- **Your AI credit spend** — total $, credits billed, per-model breakdown (requires `NUXT_GITHUB_BILLING_TOKEN`; the call always sends `?user=<session-login>` and is never user-controllable)
+- GitHub CLI usage card (sessions, requests, prompt/output token sums, CLI version) when the user has CLI activity
+- AI adoption-phase chip and top-IDE/plugin versions
+
 ### Models Tab
 View model usage analytics including model adoption over time, chat model distribution, and usage per chat mode (Ask, Agent, Edit, Inline).
 
@@ -267,7 +332,9 @@ NUXT_PUBLIC_IS_DATA_MOCKED=false
 
 #### NUXT_GITHUB_TOKEN
 
-Specifies the GitHub Personal Access Token utilized for API requests. Generate this token with the following permissions: _Read access to members_, _organization copilot metrics_, and _organization copilot seat management_.
+Specifies the GitHub Personal Access Token utilized for **metrics** API requests. Generate this token with the following permissions: _Read access to members_, _organization copilot metrics_, and _organization copilot seat management_.
+
+This token does **not** need billing scopes — billing has its own dedicated token (see `NUXT_GITHUB_BILLING_TOKEN` below). Keeping the two separate means metrics can keep using a fine-grained PAT or GitHub App, while only billing requires a classic PAT.
 
 > [!IMPORTANT]
 > **v3.0 Migration:** The new Copilot Usage Metrics API requires **Read access to members, organization copilot metrics, and organization copilot seat management** permissions. Without this, the new API endpoints will return 400/403 errors. See [GitHub App Registration](DEPLOYMENT.md#github-app-registration) for setup details.
@@ -277,6 +344,29 @@ Token is not used in the frontend.
 ````
 NUXT_GITHUB_TOKEN=
 ````
+
+#### NUXT_GITHUB_BILLING_TOKEN
+
+Optional. **Dedicated classic PAT for the Billing tab and per-user AI credit spend.** When unset, the Billing tab is hidden and the "Your AI credit spend" card on the My Usage tab is omitted — all other features keep working.
+
+Requirements:
+- **Classic PAT only** — fine-grained PATs and GitHub Apps cannot read billing.
+- Scope: **`manage_billing:enterprise`** (or `manage_billing:copilot` for non-enterprise-owned orgs).
+- Must be **SSO-authorized** for the target enterprise if SAML SSO is enforced.
+
+````
+NUXT_GITHUB_BILLING_TOKEN=ghp_classic_pat_with_manage_billing_enterprise
+````
+
+#### NUXT_BILLING_ENTERPRISE
+
+Optional. **Forces billing calls to query `/enterprises/{slug}/...` regardless of dashboard scope.** Set to the enterprise slug when an org-scoped dashboard's org is consolidated under an enterprise (the typical case — GitHub returns 404 on the `/organizations/{org}/...` billing endpoint for those orgs).
+
+````
+NUXT_BILLING_ENTERPRISE=my-enterprise-slug
+````
+
+If you get a 404 from the Billing tab with the dashboard scoped to an organization, the error message will point you at this variable.
 
 #### NUXT_GITHUB_API_BASE_URL
 
@@ -337,6 +427,55 @@ Comma-separated list of email domains allowed to sign in. When empty (default), 
 ```
 NUXT_AUTHORIZED_EMAIL_DOMAINS=company.com
 ```
+
+#### NUXT_USAGE_ADMINS
+
+Comma-separated allowlist of logins or email addresses that get **administrator privileges** on the dashboard. Administrators can:
+
+* See the **Billing tab** (aggregate AI-credit breakdown by SKU/model/cost-center/repo)
+* See **all users' rows** in the User Metrics tab and Seats Analysis (per [issue #398](https://github.com/github-copilot-resources/copilot-metrics-viewer/issues/398) — restrict user-level breakdown data to authorized users for Austrian/EU compliance)
+
+```
+# Closed by default — no one is admin; non-admins see only their own row on User Metrics
+NUXT_USAGE_ADMINS=
+
+# Grant admin to specific logins/emails
+NUXT_USAGE_ADMINS=alice,bob@company.com
+```
+
+> [!IMPORTANT]
+> **Breaking change in 3.11.0:** `NUXT_USAGE_ADMINS` was previously *open-by-default* (an empty value meant "everyone is admin"). It is now **closed-by-default**: anyone not explicitly listed is treated as a regular user and can only see their own row in User Metrics + Seats. Upgrade by setting `NUXT_USAGE_ADMINS` to your admin allowlist.
+
+> [!NOTE]
+> When `NUXT_GITHUB_BILLING_TOKEN` is unset, the Billing tab is shown to all users (admin or not) but renders a configuration-help placeholder instead of fetching data; the `NUXT_USAGE_ADMINS` gate only applies once the token is configured.
+
+The Billing tab exposes aggregate breakdowns (model / SKU / cost center) and an admin per-user breakdown. Per-user attribution depends on GitHub tagging each item with a `user`; some enterprise plans return only enterprise-level aggregates, in which case the per-user table is hidden behind an explanatory alert. The User Metrics `ai_credits_used` column and the My Usage spend card are independent of this.
+
+##### What non-admins see
+
+| Surface | Non-admin | Admin |
+|---|---|---|
+| Org / Enterprise aggregate metrics | ✅ all | ✅ all |
+| My Usage tab (own data) | ✅ own | ✅ own |
+| User Metrics tab | 🔒 own row only + banner | ✅ all rows |
+| Seats Analysis tab | 🔒 own seat only | ✅ all seats |
+| Billing tab (token configured) | ❌ hidden | ✅ visible |
+| Billing tab (token unset) | ⚙️ configuration-help placeholder | ⚙️ configuration-help placeholder |
+
+The filter is enforced **server-side** — non-admin requests never receive other users' data over the wire.
+
+##### Auth-mode matrix for Billing & My Usage tabs
+
+Metrics endpoints (User Metrics, My Usage, Seats) accept any token type. Billing endpoints accept ONLY a classic PAT (which is why they have their own dedicated env var).
+
+| Feature | Mock | GitHub App | Fine-grained PAT (`NUXT_GITHUB_TOKEN`) | Classic PAT (`NUXT_GITHUB_BILLING_TOKEN`) |
+|---|---|---|---|---|
+| My Usage tab metrics | ✅ fixtures | ✅ | ✅ | ✅ |
+| User Metrics `ai_credits_used` column | ✅ fixtures | ✅ | ✅ | ✅ |
+| My Usage "Your AI credit spend" card | ✅ fixtures | — | — | ✅ with `manage_billing:enterprise` |
+| Billing tab (aggregate + per-user) | ✅ fixtures | — | — | ✅ with `manage_billing:enterprise` |
+
+Even when on the admin allowlist, an admin only sees billing data if `NUXT_GITHUB_BILLING_TOKEN` is set AND that classic PAT is SSO-authorized for the target enterprise. If GitHub returns 403, the tab surfaces the message inline so it's clear which side needs adjustment.
 
 #### OAuth provider variables
 
