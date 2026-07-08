@@ -143,11 +143,18 @@ export default defineNuxtConfig({
       deployInfo: '',
       // New API migration flags
       useLegacyApi: false,  // Set true to use deprecated /copilot/metrics API (USE_LEGACY_API)
-      enableHistoricalMode: false,  // Enable storage-backed historical queries (NUXT_PUBLIC_ENABLE_HISTORICAL_MODE)
+      // Historical mode is on iff DATABASE_URL is set. Derived at boot so the
+      // client-side flag can never drift from the server. There is no separate
+      // NUXT_PUBLIC_ENABLE_HISTORICAL_MODE env var — set DATABASE_URL to enable both.
+      enableHistoricalMode: !!process.env.DATABASE_URL,
       hiddenTabs: '',  // Comma-separated list of tab names to hide (NUXT_PUBLIC_HIDDEN_TABS)
       enableAiChat: true,  // Enable AI-powered chat for metrics Q&A (NUXT_PUBLIC_ENABLE_AI_CHAT)
       entraClientId: '',    // NUXT_PUBLIC_ENTRA_CLIENT_ID — app registration client ID for MSAL popup auth
       entraTenantId: '',    // NUXT_PUBLIC_ENTRA_TENANT_ID — tenant ID (defaults to 'common' for multi-tenant)
+      // Optional site-wide announcement banner. When set, an info banner with this
+      // text is shown at the top of the dashboard. Users can dismiss it for the
+      // current tab session. (NUXT_PUBLIC_ANNOUNCEMENT_MESSAGE)
+      announcementMessage: '',
     }
   }
 })
